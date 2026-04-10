@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ぴんしゃん 電子カルテ</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.8.0/umd/Recharts.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0a0f1e; color: #e2e8f0; font-family: 'Hiragino Kaku Gothic Pro', 'Noto Sans JP', sans-serif; }
+  input[type=range] { width: 100%; accent-color: #7c3aed; }
+  select option { background: #1e293b; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+
+const SUPABASE_URL = 'https://abcdefgh.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGci...長い文字列...';
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+const { useState, useEffect, useMemo } = React;
+const { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar } = Recharts;
+
+const BODY_PARTS = ["頸部","肩","上背部","腰部","骨盤","股関節","膝","足首","腕・肘","手首","全身"];
+const PAIN_TYPES = ["鋭痛","鈍痛","重だるさ","しびれ","こわばり","熱感","冷感","違和感"];
+const TECHNIQUES = ["脱力誘導","自然反力利用","関節モビライゼーション","筋膜リリース","トリガーポイント","頭蓋仙骨療法","内臓マニピュレーション","経絡調整","骨盤矯正","頸椎調整","呼吸調整","ホールディング"];
+const REACTIONS = ["即時改善","徐々に改善","変化なし","一時的悪化後改善","好転反応あり"];
+const ALL_SYMPTOMS = [...BODY_PARTS, ...PAIN_TYPES];
+
+const db = {
+  async getPatients() {
+    const { data } = await supabase.from('patients').select('*').order('created_at', { ascending: false });
+    return data || [];
+  },
+  async addPatient(p) {
+    const { data } = await supabase.from('patients').insert([{ name: p.name, age: p.age ? parseInt(p.age) : null, gender: p.gender, memo: p.memo }]).select();
+    return data?.[0];
+  },
+  async deletePatient(id) { await supabase.from('patients').delete().eq('id', id); },
+  async getRecords(patientId) {
+    const { data } = await supabase.from('records').select('*').eq('patient_id', patientId).order('date', { ascending: true });
+    return data || [];
+  },
+  async getAllRecords() {
+    const { data } = await supabase.from('records').select('*').order('date', { ascending: false });
+    return data || [];
+  },
+  async addRecord(r) {
+    const { data } = await supabase.from('records').insert([{ patient_id: r.patientId, date: r.date, visit_no: r.visitNo, body_parts: r.bodyParts, pain_types: r.painTypes, techniques: r.techniques, reaction: r.reaction, score_before: r.scoreBefore, score_after: r.scoreAfter, note: r.note }]).select();
+    return data?.[0];
+  },
+  async deleteRecord(id) { await supabase.from('records').delete().eq('id', id); },
+  async exportCSV() {
+    const { data: patients } = await supabase.from('patients').select('*');
+    const { data: records } = await supabase.from('records').select('*');
+    return { patients, records };
+  }
+};
+
+const Badge = ({ children, color="#6b7280" }) => React.createElement('span', { style: { background:color+"22", color, border:`1px solid ${color}44`, borderRadius:4, padding:"2px 8px", fontSize:11, fontWeight:600, whiteSpace:"nowrap" } }, children);
+const ScoreBar = ({ score }) => { const color=score<=3?"#22c55e":score<=6?"#f59e0b":"#ef4444"; return React.createElement('div',{style:{display:"flex",alignItems:"center",gap:8}},React.createElement('div',{style:{flex:1,background:"#1e293b",borderRadius:4,height:8}},React.createElement('div',{style:{width:`${(score/10)*100}%`,background:color,borderRadius:4,height:8}})),React.createElement('span',{style:{fontSize:13,fontWeight:700,color,minWidth:28}},score)); };
+const Tab = ({ label, active, onClick }) => React.createElement('button',{onClick,style:{padding:"10px 16px",border:"none",background:"none",cursor:"pointer",fontSize:13,fontWeight:active?700:400,color:active?"#a78bfa":"#64748b",borderBottom:active?"2px solid #a78bfa":"2px solid transparent",whiteSpace:"nowrap"}},label);
+const Chip = ({ label, selected, onClick, color }) => React.createElement('button',{onClick,style:{padding:"6px 12px",borderRadius:20,fontSize:12,fontWeight:600,cursor:"pointer",background:selected?(color||"#7c3aed"):"#1e293b",border:`1px solid ${selected?(color||"#a78bfa"):"#334155"}`,color:selected?"#fff":"#94a3b8"}},label);
+
+const S = {
+  app:{ minHeight:"100vh", background:"#0a0f1e", color:"#e2e8f0" },
+  header:{ background:"linear-gradient(135deg,#0f172a 0%,#1e1b4b 100%)", borderBottom:"1px solid #1e293b", padding:"0 24px", display:"flex", alignItems:"center", justifyContent:"space-between", height:60 },
+  logo:{ fontSize:20, fontWeight:900, letterSpacing:"0.08em", color:"#a78bfa" },
+  nav:{ display:"flex", borderBottom:"1px solid #1e293b", background:"#0d1424", padding:"0 24px", overflowX:"auto" },
+  page:{ padding:24, maxWidth:960, margin:"0 auto" },
+  card:{ background:"#0f172a", border:"1px solid #1e293b", borderRadius:12, padding:20, marginBottom:16 },
+  label:{ fontSize:11, color:"#64748b", letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:6, display:"block" },
+  input:{ width:"100%", background:"#1e293b", border:"1px solid #334155", borderRadius:8, padding:"10px 14px", color:"#e2e8f0", fontSize:14, outline:"none", boxSizing:"border-box" },
+  btn:{ background:"linear-gradient(135deg,#7c3aed,#a78bfa)", border:"none", borderRadius:8, padding:"10px 22px", color:"#fff", fontWeight:700, fontSize:14, cursor:"pointer" },
+  btnSm:{ background:"#1e293b", border:"1px solid #334155", borderRadius:6, padding:"6px 14px", color:"#a78bfa", fontWeight:600, fontSize:12, cursor:"pointer" },
+  btnDanger:{ background:"#1e293b", border:"1px solid #ef444444", borderRadius:6, padding:"6px 14px", color:"#ef4444", fontWeight:600, fontSize:12, cursor:"pointer" },
+  grid2:{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 },
+  sectionTitle:{ fontSize:16, fontWeight:700, color:"#c4b5fd", marginBottom:16 },
+  chipWrap:{ display:"flex", flexWrap:"wrap", gap:6 },
+};
+
+function downloadCSV(filename, rows) {
+  const csv = rows.map(r => Object.values(r).map(v => `"${String(v||'').replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob([Object.keys(rows[0]).join(',')+'\n'+csv], { type:'text/csv;charset=utf-8;' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; a.click();
+}
+
+function PatientsPage({ setSelectedPatient, setPage, patients, setPatients }) {
+  const [records, setRecords] = useState([]);
+  const [form, setForm] = useState({ name:"", age:"", gender:"未設定", memo:"" });
+  const [adding, setAdding] = useState(false);
+  const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(true);
+  useEffect(() => { Promise.all([db.getPatients(), db.getAllRecords()]).then(([p,r]) => { setPatients(p); setRecords(r); setLoading(false); }); }, []);
+  const add = async () => { if(!form.name.trim()) return; const p=await db.addPatient(form); if(p) setPatients(prev=>[p,...prev]); setForm({name:"",age:"",gender:"未設定",memo:""}); setAdding(false); };
+  const del = async (id) => { await db.deletePatient(id); setPatients(prev=>prev.filter(p=>p.id!==id)); setRecords(prev=>prev.filter(r=>r.patient_id!==id)); };
+  const visitCount = pid => records.filter(r=>r.patient_id===pid).length;
+  const lastVisit = pid => { const rs=records.filter(r=>r.patient_id===pid).sort((a,b)=>b.date.localeCompare(a.date)); return rs[0]?.date||"—"; };
+  const filtered = patients.filter(p => !search || p.name.includes(search) || (p.memo||"").includes(search));
+  const exportAll = async () => { const {patients:p,records:r}=await db.exportCSV(); if(p?.length) downloadCSV('patients.csv',p); if(r?.length) downloadCSV('records.csv',r); };
+  return React.createElement('div',{style:S.page},
+    React.createElement('div',{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}},
+      React.createElement('div',{style:S.sectionTitle},'患者一覧 ',React.createElement('span',{style:{color:"#475569",fontSize:13}},`(${patients.length}名)`)),
+      React.createElement('div',{style:{display:"flex",gap:8}},
+        React.createElement('button',{style:S.btnSm,onClick:exportAll},'📥 CSVエクスポート'),
+        React.createElement('button',{style:S.btn,onClick:()=>setAdding(!adding)},'＋ 新規登録')
+      )
+    ),
+    React.createElement('input',{style:{...S.input,marginBottom:16},placeholder:"🔍 患者名・メモで検索…",value:search,onChange:e=>setSearch(e.target.value)}),
+    loading && React.createElement('div',{style:{textAlign:"center",color:"#64748b",padding:40}},'読み込み中…'),
+    adding && React.createElement('div',{style:{...S.card,borderColor:"#7c3aed44"}},
+      React.createElement('div',{style:S.sectionTitle},'新規患者登録'),
+      React.createElement('div',{style:S.grid2},
+        React.createElement('div',null,React.createElement('label',{style:S.label},'氏名 *'),React.createElement('input',{style:S.input,value:form.name,onChange:e=>setForm({...form,name:e.target.value}),placeholder:"山田 花子"})),
+        React.createElement('div',null,React.createElement('label',{style:S.label},'年齢'),React.createElement('input',{style:S.input,type:"number",value:form.age,onChange:e=>setForm({...form,age:e.target.value}),placeholder:"45"}))
+      ),
+      React.createElement('div',{style:{marginTop:12}},React.createElement('label',{style:S.label},'性別'),React.createElement('div',{style:S.chipWrap},["男性","女性","未設定"].map(g=>React.createElement(Chip,{key:g,label:g,selected:form.gender===g,onClick:()=>setForm({...form,gender:g})})))),
+      React.createElement('div',{style:{marginTop:12}},React.createElement('label',{style:S.label},'メモ'),React.createElement('textarea',{style:{...S.input,minHeight:60,resize:"vertical"},value:form.memo,onChange:e=>setForm({...form,memo:e.target.value}),placeholder:"高血圧・骨粗鬆症など"})),
+      React.createElement('div',{style:{marginTop:16,display:"flex",gap:8}},React.createElement('button',{style:S.btn,onClick:add},'登録'),React.createElement('button',{style:S.btnSm,onClick:()=>setAdding(false)},'キャンセル'))
+    ),
+    filtered.length===0 && !loading && React.createElement('div',{style:{...S.card,textAlign:"center",color:"#475569",padding:40}},search?"該当患者なし":"患者が登録されていません"),
+    ...filtered.map(p=>React.createElement('div',{key:p.id,style:{...S.card,display:"flex",alignItems:"center",gap:16,cursor:"pointer"},onClick:()=>{setSelectedPatient(p.id);setPage("record");}},
+      React.createElement('div',{style:{width:44,height:44,borderRadius:"50%",background:"linear-gradient(135deg,#7c3aed,#a78bfa)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,fontWeight:700,flexShrink:0}},p.name[0]),
+      React.createElement('div',{style:{flex:1}},
+        React.createElement('div',{style:{fontWeight:700,fontSize:16}},p.name,React.createElement('span',{style:{color:"#64748b",fontSize:13,fontWeight:400}},` ${p.age?p.age+"歳":""} ${p.gender!=="未設定"?p.gender:""}`)),
+        p.memo&&React.createElement('div',{style:{fontSize:12,color:"#64748b",marginTop:2}},p.memo)
+      ),
+      React.createElement('div',{style:{textAlign:"right",flexShrink:0}},
+        React.createElement('div',{style:{fontSize:12,color:"#64748b"}},'来院 ',React.createElement('span',{style:{color:"#a78bfa",fontWeight:700}},visitCount(p.id)),' 回'),
+        React.createElement('div',{style:{fontSize:11,color:"#475569",marginTop:2}},'最終: ',lastVisit(p.id))
+      ),
+      React.createElement('button',{style:S.btnDanger,onClick:e=>{e.stopPropagation();del(p.id);}},'削除')
+    ))
+  );
+}
+
+function RecordPage({ selectedPatient, setSelectedPatient, patients }) {
+  const patient = patients.find(p=>p.id===selectedPatient);
+  const [records, setRecords] = useState([]);
+  const [form, setForm] = useState({ date:new Date().toISOString().slice(0,10), visitNo:1, bodyParts:[], painTypes:[], techniques:[], reaction:"", scoreBefore:5, scoreAfter:3, note:"" });
+  const [adding, setAdding] = useState(false);
+  const [expanded, setExpanded] = useState(null);
+  const [loading, setLoading] = useState(false);
+  useEffect(() => { if(!selectedPatient) return; setLoading(true); db.getRecords(selectedPatient).then(r=>{setRecords(r);setForm(f=>({...f,visitNo:r.length+1}));setLoading(false);}); }, [selectedPatient]);
+  const toggle = (field,val) => setForm(f=>({...f,[field]:f[field].includes(val)?f[field].filter(x=>x!==val):[...f[field],val]}));
+  const save = async () => { const rec=await db.addRecord({patientId:selectedPatient,...form}); if(rec){setRecords(prev=>[...prev,rec]);setForm(f=>({...f,visitNo:f.visitNo+1,bodyParts:[],painTypes:[],techniques:[],reaction:"",scoreBefore:5,scoreAfter:3,note:""}));setAdding(false);} };
+  const delRecord = async (id) => { await db.deleteRecord(id); setRecords(prev=>prev.filter(r=>r.id!==id)); };
+  const improvement = form.scoreBefore>0?Math.round((1-form.scoreAfter/form.scoreBefore)*100):0;
+  if(!selectedPatient) return React.createElement('div',{style:S.page},
+    React.createElement('div',{style:{...S.card,textAlign:"center",color:"#475569",padding:40}},'患者を選択してください'),
+    React.createElement('div',{style:S.card},React.createElement('div',{style:S.sectionTitle},'患者を選択'),
+      ...patients.map(p=>React.createElement('div',{key:p.id,style:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 0",borderBottom:"1px solid #1e293b",cursor:"pointer"},onClick:()=>setSelectedPatient(p.id)},React.createElement('span',{style:{fontWeight:600}},p.name)))
+    )
+  );
+  const sortedRecords = [...records].sort((a,b)=>b.date.localeCompare(a.date));
+  return React.createElement('div',{style:S.page},
+    React.createElement('div',{style:{display:"flex",alignItems:"center",gap:12,marginBottom:20}},
+      React.createElement('button',{style:S.btnSm,onClick:()=>setSelectedPatient(null)},'← 一覧'),
+      React.createElement('div',null,React.createElement('div',{style:{fontWeight:700,fontSize:18}},patient?.name),React.createElement('div',{style:{fontSize:12,color:"#64748b"}},`通算 ${records.length} 回来院`)),
+      React.createElement('button',{style:{...S.btn,marginLeft:"auto"},onClick:()=>setAdding(!adding)},'＋ 施術記録')
+    ),
+    adding && React.createElement('div',{style:{...S.card,borderColor:"#7c3aed44"}},
+      React.createElement('div',{style:S.sectionTitle},'施術記録入力'),
+      React.createElement('div',{style:S.grid2},
+        React.createElement('div',null,React.createElement('label',{style:S.label},'施術日'),React.createElement('input',{style:S.input,type:"date",value:form.date,onChange:e=>setForm({...form,date:e.target.value})})),
+        React.createElement('div',null,React.createElement('label',{style:S.label},'来院回数'),React.createElement('input',{style:S.input,type:"number",value:form.visitNo,onChange:e=>setForm({...form,visitNo:+e.target.value})}))
+      ),
+      React.createElement('div',{style:{marginTop:14}},React.createElement('label',{style:S.label},'症状部位'),React.createElement('div',{style:S.chipWrap},BODY_PARTS.map(b=>React.createElement(Chip,{key:b,label:b,selected:form.bodyParts.includes(b),onClick:()=>toggle("bodyParts",b)})))),
+      React.createElement('div',{style:{marginTop:14}},React.createElement('label',{style:S.label},'痛みの種類'),React.createElement('div',{style:S.chipWrap},PAIN_TYPES.map(t=>React.createElement(Chip,{key:t,label:t,selected:form.painTypes.includes(t),onClick:()=>toggle("painTypes",t)})))),
+      React.createElement('div',{style:{marginTop:14}},React.createElement('label',{style:S.label},'使用手技'),React.createElement('div',{style:S.chipWrap},TECHNIQUES.map(t=>React.createElement(Chip,{key:t,label:t,selected:form.techniques.includes(t),onClick:()=>toggle("techniques",t)})))),
+      React.createElement('div',{style:{marginTop:14}},React.createElement('label',{style:S.label},'施術後反応'),React.createElement('div',{style:S.chipWrap},REACTIONS.map(r=>React.createElement(Chip,{key:r,label:r,selected:form.reaction===r,onClick:()=>setForm({...form,reaction:r})})))),
+      React.createElement('div',{style:{...S.grid2,marginTop:14}},
+        React.createElement('div',null,React.createElement('label',{style:S.label},'施術前スコア（0-10）'),React.createElement('input',{style:S.input,type:"range",min:0,max:10,value:form.scoreBefore,onChange:e=>setForm({...form,scoreBefore:+e.target.value})}),React.createElement(ScoreBar,{score:form.scoreBefore})),
+        React.createElement('div',null,React.createElement('label',{style:S.label},'施術後スコア（0-10）'),React.createElement('input',{style:S.input,type:"range",min:0,max:10,value:form.scoreAfter,onChange:e=>setForm({...form,scoreAfter:+e.target.value})}),React.createElement(ScoreBar,{score:form.scoreAfter}))
+      ),
+      form.scoreBefore>0&&React.createElement('div',{style:{marginTop:10,background:improvement>=0?"#16a34a22":"#dc262622",borderRadius:8,padding:"8px 14px",fontSize:13,color:improvement>=0?"#22c55e":"#ef4444"}},`今回の改善率: `,React.createElement('strong',null,`${improvement}%`)),
+      React.createElement('div',{style:{marginTop:14}},React.createElement('label',{style:S.label},'所見・メモ'),React.createElement('textarea',{style:{...S.input,minHeight:70,resize:"vertical"},value:form.note,onChange:e=>setForm({...form,note:e.target.value}),placeholder:"施術中の気づき、患者の反応など"})),
+      React.createElement('div',{style:{marginTop:16,display:"flex",gap:8}},React.createElement('button',{style:S.btn,onClick:save},'保存'),React.createElement('button',{style:S.btnSm,onClick:()=>setAdding(false)},'キャンセル'))
+    ),
+    loading&&React.createElement('div',{style:{textAlign:"center",color:"#64748b",padding:40}},'読み込み中…'),
+    ...sortedRecords.map(r=>{
+      const imp=r.score_before>0?Math.round((1-r.score_after/r.score_before)*100):0;
+      const open=expanded===r.id;
+      return React.createElement('div',{key:r.id,style:S.card},
+        React.createElement('div',{style:{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"},onClick:()=>setExpanded(open?null:r.id)},
+          React.createElement('div',{style:{display:"flex",alignItems:"center",gap:10}},
+            React.createElement('span',{style:{fontSize:13,color:"#64748b"}},r.date),
+            React.createElement('span',{style:{fontSize:13,color:"#a78bfa",fontWeight:700}},`第${r.visit_no}回`),
+            React.createElement(Badge,{color:imp>=50?"#22c55e":imp>=20?"#f59e0b":"#ef4444"},`${imp}%改善`)
+          ),
+          React.createElement('div',{style:{display:"flex",gap:8,alignItems:"center"}},
+            React.createElement('button',{style:S.btnDanger,onClick:e=>{e.stopPropagation();delRecord(r.id);}},'削除'),
+            React.createElement('span',{style:{color:"#64748b",fontSize:12}},open?"▲":"▼")
+          )
+        ),
+        React.createElement('div',{style:{marginTop:8,display:"flex",flexWrap:"wrap",gap:6}},
+          ...(r.body_parts||[]).map(b=>React.createElement(Badge,{key:b,color:"#3b82f6"},b)),
+          ...(r.pain_types||[]).map(t=>React.createElement(Badge,{key:t,color:"#f59e0b"},t)),
+          ...(r.techniques||[]).slice(0,open?99:3).map(t=>React.createElement(Badge,{key:t,color:"#a78bfa"},t)),
+          !open&&(r.techniques||[]).length>3&&React.createElement('span',{style:{fontSize:11,color:"#475569"}},`+${r.techniques.length-3}`)
+        ),
+        open&&React.createElement('div',null,
+          React.createElement('div',{style:{...S.grid2,marginTop:12}},
+            React.createElement('div',null,React.createElement('label',{style:S.label},'施術前'),React.createElement(ScoreBar,{score:r.score_before})),
+            React.createElement('div',null,React.createElement('label',{style:S.label},'施術後'),React.createElement(ScoreBar,{score:r.score_after}))
+          ),
+          r.reaction&&React.createElement('div',{style:{marginTop:8}},React.createElement(Badge,{color:"#22c55e"},r.reaction)),
+          r.note&&React.createElement('div',{style:{marginTop:8,fontSize:13,color:"#94a3b8",background:"#1e293b",borderRadius:6,padding:"8px 12px"}},r.note)
+        )
+      );
+    }),
+    records.length===0&&!adding&&!loading&&React.createElement('div',{style:{...S.card,textAlign:"center",color:"#475569",padding:40}},'まだ記録がありません')
+  );
+}
+
+function SearchPage({ setSelectedPatient, setPage, patients }) {
+  const [query,setQuery]=useState(""); const [filterPart,setFilterPart]=useState(""); const [filterTech,setFilterTech]=useState(""); const [filterPain,setFilterPain]=useState("");
+  const [allRecords,setAllRecords]=useState([]); const [loading,setLoading]=useState(true);
+  useEffect(()=>{db.getAllRecords().then(r=>{setAllRecords(r);setLoading(false);});},[]);
+  const results=useMemo(()=>allRecords.filter(r=>{
+    const patient=patients.find(p=>p.id===r.patient_id); if(!patient) return false;
+    return (!query||patient.name.includes(query)||(r.note||"").includes(query)||(r.body_parts||[]).some(b=>b.includes(query))||(r.techniques||[]).some(t=>t.includes(query))||(r.pain_types||[]).some(t=>t.includes(query)))
+      &&(!filterPart||(r.body_parts||[]).includes(filterPart))&&(!filterTech||(r.techniques||[]).includes(filterTech))&&(!filterPain||(r.pain_types||[]).includes(filterPain));
+  }),[allRecords,query,filterPart,filterTech,filterPain,patients]);
+  return React.createElement('div',{style:S.page},
+    React.createElement('div',{style:S.sectionTitle},'カルテ横断検索'),
+    React.createElement('div',{style:S.card},
+      React.createElement('input',{style:{...S.input,marginBottom:12},placeholder:"🔍 患者名・症状・手技・メモ…",value:query,onChange:e=>setQuery(e.target.value)}),
+      React.createElement('div',{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}},
+        React.createElement('div',null,React.createElement('label',{style:S.label},'部位'),React.createElement('select',{style:S.input,value:filterPart,onChange:e=>setFilterPart(e.target.value)},React.createElement('option',{value:""},'すべて'),...BODY_PARTS.map(b=>React.createElement('option',{key:b},b)))),
+        React.createElement('div',null,React.createElement('label',{style:S.label},'痛みの種類'),React.createElement('select',{style:S.input,value:filterPain,onChange:e=>setFilterPain(e.target.value)},React.createElement('option',{value:""},'すべて'),...PAIN_TYPES.map(t=>React.createElement('option',{key:t},t)))),
+        React.createElement('div',null,React.createElement('label',{style:S.label},'手技'),React.createElement('select',{style:S.input,value:filterTech,onChange:e=>setFilterTech(e.target.value)},React.createElement('option',{value:""},'すべて'),...TECHNIQUES.map(t=>React.createElement('option',{key:t},t))))
+      )
+    ),
+    loading&&React.createElement('div',{style:{textAlign:"center",color:"#64748b",padding:40}},'読み込み中…'),
+    React.createElement('div',{style:{fontSize:13,color:"#64748b",marginBottom:12}},`${results.length} 件ヒット`),
+    ...results.map(r=>{
+      const patient=patients.find(p=>p.id===r.patient_id);
+      const imp=r.score_before>0?Math.round((1-r.score_after/r.score_before)*100):0;
+      return React.createElement('div',{key:r.id,style:{...S.card,cursor:"pointer"},onClick:()=>{setSelectedPatient(r.patient_id);setPage("record");}},
+        React.createElement('div',{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}},
+          React.createElement('div',null,React.createElement('span',{style:{fontWeight:700,fontSize:15}},patient?.name),React.createElement('span',{style:{marginLeft:10,fontSize:12,color:"#64748b"}},`${r.date} 第${r.visit_no}回`)),
+          React.createElement(Badge,{color:imp>=50?"#22c55e":imp>=20?"#f59e0b":"#ef4444"},`${imp}%改善`)
+        ),
+        React.createElement('div',{style:{marginTop:8,display:"flex",flexWrap:"wrap",gap:6}},
+          ...(r.body_parts||[]).map(b=>React.createElement(Badge,{key:b,color:"#3b82f6"},b)),
+          ...(r.pain_types||[]).map(t=>React.createElement(Badge,{key:t,color:"#f59e0b"},t)),
+          ...(r.techniques||[]).map(t=>React.createElement(Badge,{key:t,color:"#a78bfa"},t))
+        ),
+        r.note&&React.createElement('div',{style:{marginTop:8,fontSize:12,color:"#64748b",background:"#1e293b",borderRadius:6,padding:"6px 10px"}},r.note)
+      );
+    })
+  );
+}
+
+function AnalysisPage({ patients }) {
+  const [selectedPatient,setSelectedPatient]=useState(""); const [matrixSymptom,setMatrixSymptom]=useState("腰部");
+  const [allRecords,setAllRecords]=useState([]); const [patientRecords,setPatientRecords]=useState([]);
+  useEffect(()=>{db.getAllRecords().then(r=>setAllRecords(r));},[]);
+  useEffect(()=>{ if(selectedPatient) db.getRecords(selectedPatient).then(r=>setPatientRecords(r.sort((a,b)=>a.visit_no-b.visit_no))); else setPatientRecords([]); },[selectedPatient]);
+  const srcRecords=selectedPatient?patientRecords:allRecords;
+  const patient=patients.find(p=>p.id===selectedPatient);
+  const chartData=patientRecords.map(r=>({回数:`${r.visit_no}回目`,施術前:r.score_before,施術後:r.score_after,改善率:r.score_before>0?Math.round((1-r.score_after/r.score_before)*100):0}));
+  const techStats={};
+  srcRecords.forEach(r=>{(r.techniques||[]).forEach(t=>{if(!techStats[t])techStats[t]={total:0,sumImp:0};const imp=r.score_before>0?(1-r.score_after/r.score_before)*100:0;techStats[t].total++;techStats[t].sumImp+=imp;});});
+  const techData=Object.entries(techStats).map(([name,s])=>({name,平均改善率:Math.round(s.sumImp/s.total),施術回数:s.total})).sort((a,b)=>b.平均改善率-a.平均改善率);
+  const matrixRecords=allRecords.filter(r=>(r.body_parts||[]).includes(matrixSymptom)||(r.pain_types||[]).includes(matrixSymptom));
+  const matrixData={};
+  matrixRecords.forEach(r=>{const imp=r.score_before>0?(1-r.score_after/r.score_before)*100:0;(r.techniques||[]).forEach(t=>{if(!matrixData[t])matrixData[t]={total:0,sumImp:0,reactions:{}};matrixData[t].total++;matrixData[t].sumImp+=imp;if(r.reaction)matrixData[t].reactions[r.reaction]=(matrixData[t].reactions[r.reaction]||0)+1;});});
+  const matrixRows=Object.entries(matrixData).map(([tech,s])=>({tech,avgImp:Math.round(s.sumImp/s.total),count:s.total,topReaction:Object.entries(s.reactions).sort((a,b)=>b[1]-a[1])[0]?.[0]||"—"})).sort((a,b)=>b.avgImp-a.avgImp);
+  return React.createElement('div',{style:S.page},
+    React.createElement('div',{style:{display:"flex",alignItems:"center",gap:12,marginBottom:20}},
+      React.createElement('div',{style:S.sectionTitle},'分析・グラフ'),
+      React.createElement('select',{style:{...S.input,width:"auto",marginLeft:"auto"},value:selectedPatient,onChange:e=>setSelectedPatient(e.target.value)},React.createElement('option',{value:""},'全患者'),...patients.map(p=>React.createElement('option',{key:p.id,value:p.id},p.name)))
+    ),
+    selectedPatient&&chartData.length>1&&React.createElement('div',{style:S.card},
+      React.createElement('div',{style:{fontSize:14,fontWeight:700,color:"#c4b5fd",marginBottom:16}},`${patient?.name} — スコア推移`),
+      React.createElement(ResponsiveContainer,{width:"100%",height:220},React.createElement(LineChart,{data:chartData},React.createElement(CartesianGrid,{strokeDasharray:"3 3",stroke:"#1e293b"}),React.createElement(XAxis,{dataKey:"回数",tick:{fill:"#64748b",fontSize:12}}),React.createElement(YAxis,{domain:[0,10],tick:{fill:"#64748b",fontSize:12}}),React.createElement(Tooltip,{contentStyle:{background:"#0f172a",border:"1px solid #334155",borderRadius:8}}),React.createElement(Legend),React.createElement(Line,{type:"monotone",dataKey:"施術前",stroke:"#ef4444",strokeWidth:2,dot:{r:4}}),React.createElement(Line,{type:"monotone",dataKey:"施術後",stroke:"#22c55e",strokeWidth:2,dot:{r:4}})))
+    ),
+    techData.length>0&&React.createElement('div',{style:S.card},
+      React.createElement('div',{style:{fontSize:14,fontWeight:700,color:"#c4b5fd",marginBottom:16}},`${selectedPatient?patient?.name+" — ":"全患者 — "}手技別 平均改善率`),
+      React.createElement(ResponsiveContainer,{width:"100%",height:Math.max(200,techData.length*36)},React.createElement(BarChart,{data:techData,layout:"vertical"},React.createElement(CartesianGrid,{strokeDasharray:"3 3",stroke:"#1e293b"}),React.createElement(XAxis,{type:"number",unit:"%",tick:{fill:"#64748b",fontSize:11}}),React.createElement(YAxis,{type:"category",dataKey:"name",tick:{fill:"#94a3b8",fontSize:11},width:140}),React.createElement(Tooltip,{contentStyle:{background:"#0f172a",border:"1px solid #334155",borderRadius:8}}),React.createElement(Bar,{dataKey:"平均改善率",fill:"#a78bfa",radius:[0,4,4,0]})))
+    ),
+    React.createElement('div',{style:S.card},
+      React.createElement('div',{style:{fontSize:14,fontWeight:700,color:"#c4b5fd",marginBottom:12}},'症状別 手技有効性ランキング'),
+      React.createElement('div',{style:{marginBottom:12}},React.createElement('label',{style:S.label},'症状を選択'),React.createElement('div',{style:S.chipWrap},...ALL_SYMPTOMS.map(s=>React.createElement(Chip,{key:s,label:s,selected:matrixSymptom===s,onClick:()=>setMatrixSymptom(s),color:BODY_PARTS.includes(s)?"#3b82f6":"#f59e0b"})))),
+      matrixRows.length===0?React.createElement('div',{style:{textAlign:"center",color:"#475569",padding:20}},`「${matrixSymptom}」の記録がありません`):
+      React.createElement('div',{style:{overflowX:"auto"}},React.createElement('table',{style:{width:"100%",borderCollapse:"collapse",fontSize:13}},
+        React.createElement('thead',null,React.createElement('tr',{style:{borderBottom:"1px solid #334155"}},React.createElement('th',{style:{textAlign:"left",padding:"8px 12px",color:"#64748b"}},'手技'),React.createElement('th',{style:{textAlign:"center",padding:"8px 12px",color:"#64748b"}},'回数'),React.createElement('th',{style:{textAlign:"center",padding:"8px 12px",color:"#64748b"}},'平均改善率'),React.createElement('th',{style:{textAlign:"center",padding:"8px 12px",color:"#64748b"}},'主な反応'))),
+        React.createElement('tbody',null,...matrixRows.map((row,i)=>React.createElement('tr',{key:row.tech,style:{borderBottom:"1px solid #1e293b",background:i%2===0?"#0f172a":"#0d1424"}},React.createElement('td',{style:{padding:"10px 12px",fontWeight:600,color:"#c4b5fd"}},row.tech),React.createElement('td',{style:{textAlign:"center",padding:"10px 12px",color:"#94a3b8"}},row.count),React.createElement('td',{style:{textAlign:"center",padding:"10px 12px"}},React.createElement('span',{style:{color:row.avgImp>=50?"#22c55e":row.avgImp>=20?"#f59e0b":"#ef4444",fontWeight:700,fontSize:15}},`${row.avgImp}%`)),React.createElement('td',{style:{textAlign:"center",padding:"10px 12px"}},React.createElement(Badge,{color:"#22c55e"},row.topReaction)))))
+      ))
+    )
+  );
+}
+
+function App() {
+  const [page,setPage]=useState("patients"); const [patients,setPatients]=useState([]); const [selectedPatient,setSelectedPatient]=useState(null); const [loading,setLoading]=useState(true);
+  useEffect(()=>{db.getPatients().then(p=>{setPatients(p);setLoading(false);});},[]);
+  if(loading) return React.createElement('div',{style:{...S.app,display:"flex",alignItems:"center",justifyContent:"center",minHeight:"100vh"}},React.createElement('div',{style:{color:"#a78bfa",fontSize:16}},'読み込み中…'));
+  return React.createElement('div',{style:S.app},
+    React.createElement('header',{style:S.header},
+      React.createElement('div',null,React.createElement('div',{style:S.logo},'ぴんしゃん'),React.createElement('div',{style:{fontSize:11,color:"#475569"}},'整体院 電子カルテシステム')),
+      React.createElement('div',{style:{fontSize:12,color:"#475569"}},`患者 ${patients.length}名`)
+    ),
+    React.createElement('nav',{style:S.nav},
+      React.createElement(Tab,{label:"患者一覧",active:page==="patients",onClick:()=>setPage("patients")}),
+      React.createElement(Tab,{label:"カルテ記録",active:page==="record",onClick:()=>setPage("record")}),
+      React.createElement(Tab,{label:"🔍 検索",active:page==="search",onClick:()=>setPage("search")}),
+      React.createElement(Tab,{label:"分析・グラフ",active:page==="analysis",onClick:()=>setPage("analysis")})
+    ),
+    page==="patients"&&React.createElement(PatientsPage,{setSelectedPatient,setPage,patients,setPatients}),
+    page==="record"&&React.createElement(RecordPage,{selectedPatient,setSelectedPatient,patients}),
+    page==="search"&&React.createElement(SearchPage,{setSelectedPatient,setPage,patients}),
+    page==="analysis"&&React.createElement(AnalysisPage,{patients})
+  );
+}
+
+ReactDOM.render(React.createElement(App), document.getElementById('root'));
+</script>
+</body>
+</html>
